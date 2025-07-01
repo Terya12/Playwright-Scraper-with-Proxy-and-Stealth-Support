@@ -58,17 +58,16 @@ async def run_browser(task_func: Callable[[Page], Any]) -> Optional[Any]:
             try:
                 browser = await p.chromium.launch(
                     headless=False,
-                    slow_mo=100,
                     channel="chrome",
                     args=["--no-sandbox", "--disable-blink-features=AutomationControlled"]
                 )
                 context = await browser.new_context(
-                    user_agent=user_agent,
-                    viewport={"width": 1280, "height": 800},
-                    locale="en-US",
-                    timezone_id="America/New_York",
-                    java_script_enabled=True,
-                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"}
+                    # user_agent=user_agent,
+                    # viewport={"width": 1280, "height": 800},
+                    # locale="en-US",
+                    # timezone_id="America/New_York",
+                    # java_script_enabled=True,
+                    # extra_http_headers={"Accept-Language": "en-US,en;q=0.9"}
                 )
 
                 page = await context.new_page()

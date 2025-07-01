@@ -87,16 +87,15 @@ async def scrape_products_on_page(page: Page, page_num: int):
         except Exception:
             return None
 
-    # Параллельный сбор (в 5–10 раз быстрее)
+
     result = await asyncio.gather(*(extract(p) for p in product_items))
-    result = [item for item in result if item]  # фильтрация None
+    result = [item for item in result if item]
 
     logger.info(f"Scraping finished. Collected products: {len(result)}")
     return result
 
 async def task(page: Page):
     total_pages = await get_total_pages(page)
-    logger.info(f"Total pages detected: {total_pages}")
     all_results = []
     for page_num in range(1, total_pages + 1):
         try:
