@@ -35,7 +35,7 @@ Run the main script:
 python main.py
 ```
 Proxy Configuration
-Proxies can be set in data.txt or via environment variables, depending on your implementation.
+Proxies can be set in data.txt
 
 Logging
 A custom logging module is used for easy debugging and monitoring.
