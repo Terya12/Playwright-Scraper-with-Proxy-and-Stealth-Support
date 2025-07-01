@@ -1,6 +1,7 @@
+import asyncio
 import json
 from pathlib import Path
-from playwright.async_api import Page
+from patchright.async_api import Page
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -47,6 +48,9 @@ async def get_total_pages(page: Page) -> int:
     if await page.locator(".page-content.page-404").count():
         raise Exception("⛔ Access blocked by Cloudflare (404 page)")
 
+    if await page.locator("h1", has_text="403 Forbidden").count():
+        raise Exception("⛔ Access forbidden (403 Forbidden page)")
+
     try:
         await page.wait_for_selector(".list-tool-pagination-text", timeout=60000)
         pagination_texts = await page.locator(".list-tool-pagination-text strong").all_inner_texts()
@@ -63,37 +67,45 @@ async def scrape_products_on_page(page: Page, page_num: int):
     logger.info(f"➡️ Navigating to page {page_num}: {url}")
     await page.goto(url, timeout=60000)
 
-    # Check for Cloudflare block
-    if await page.locator(".page-content.page-404").count():
-        raise Exception("⛔ Access blocked by Cloudflare (404 page)")
-
     await page.wait_for_selector(".item-cell", timeout=20000)
     logger.info("Page loaded, starting scraping")
 
-    products = await page.locator(".item-cell").all()
-    logger.info(f"Found products: {len(products)}")
+    product_items = await page.locator(".item-cell").all()
 
-    result = []
-    for product in products:
-        title = await product.locator(".item-title").inner_text() if await product.locator(".item-title").count() else ""
-        price = await product.locator(".price-current").inner_text() if await product.locator(".price-current").count() else ""
-        link = await product.locator(".item-title").get_attribute("href") if await product.locator(".item-title").count() else ""
+    logger.info(f"Found products: {len(product_items)}")
 
-        result.append({
-            "title": title.strip(),
-            "price": price.strip(),
-            "link": link.strip() if link else ""
-        })
+    async def extract(product):
+        try:
+            title = await product.locator(".item-title").inner_text()
+            price = await product.locator(".price-current").inner_text()
+            link = await product.locator(".item-title").get_attribute("href")
+            return {
+                "title": title.strip(),
+                "price": price.strip(),
+                "link": link.strip() if link else ""
+            }
+        except Exception:
+            return None
+
+    # Параллельный сбор (в 5–10 раз быстрее)
+    result = await asyncio.gather(*(extract(p) for p in product_items))
+    result = [item for item in result if item]  # фильтрация None
 
     logger.info(f"Scraping finished. Collected products: {len(result)}")
     return result
 
 async def task(page: Page):
     total_pages = await get_total_pages(page)
+    logger.info(f"Total pages detected: {total_pages}")
     all_results = []
     for page_num in range(1, total_pages + 1):
-        page_result = await scrape_products_on_page(page, page_num)
-        all_results.extend(page_result)
-
+        try:
+            logger.info(f"Start scraping page {page_num}")
+            page_result = await scrape_products_on_page(page, page_num)
+            logger.info(f"End scraping page {page_num}, found {len(page_result)} products")
+            all_results.extend(page_result)
+        except Exception as e:
+            logger.error(f"Error scraping page {page_num}: {e}")
+            break
     save_unique_items(all_results)
     return all_results

@@ -2,7 +2,7 @@ import asyncio
 import random
 from pathlib import Path
 from typing import Callable, Optional, Any
-from playwright.async_api import async_playwright, Page
+from patchright.async_api import async_playwright, Page
 from playwright_stealth import stealth_async
 from core.logger import get_logger
 
@@ -50,23 +50,18 @@ async def run_browser(task_func: Callable[[Page], Any]) -> Optional[Any]:
     logger.info("🚀 Launching browser with proxy rotation")
 
     proxies = load_proxies_from_file()
-    if not proxies:
-        logger.warning("⚠️ Proxy list is empty — execution aborted.")
-        return None
-
     user_agent = random.choice(USER_AGENTS)
 
     async with async_playwright() as p:
-        for attempt, proxy in enumerate(proxies, 1):
-            logger.info(f"🔁 Attempt #{attempt} with proxy {proxy['server']}")
+        if not proxies:
+            logger.warning("⚠️ Proxy list is empty — launching browser without proxy.")
             try:
                 browser = await p.chromium.launch(
                     headless=False,
                     slow_mo=100,
-                    args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-                    proxy=proxy
+                    channel="chrome",
+                    args=["--no-sandbox", "--disable-blink-features=AutomationControlled"]
                 )
-
                 context = await browser.new_context(
                     user_agent=user_agent,
                     viewport={"width": 1280, "height": 800},
@@ -85,15 +80,52 @@ async def run_browser(task_func: Callable[[Page], Any]) -> Optional[Any]:
                 await context.close()
                 await browser.close()
 
-                logger.info(f"✅ Successfully completed with proxy {proxy['server']}")
+                logger.info("✅ Successfully completed without proxy")
                 return result
 
             except Exception as e:
-                logger.warning(f"❌ Failed with proxy {proxy['server']}: {e}")
-                try:
-                    await browser.close()
-                except Exception:
-                    pass
+                logger.error(f"⛔ Failed to run browser without proxy: {e}")
+                return None
 
-        logger.error("⛔ All proxies from file have been tried — task failed.")
-        return None
+        else:
+            for attempt, proxy in enumerate(proxies, 1):
+                logger.info(f"🔁 Attempt #{attempt} with proxy {proxy['server']}")
+                try:
+                    browser = await p.chromium.launch(
+                        headless=False,
+                        slow_mo=100,
+                        channel="chrome",
+                        args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+                        proxy=proxy
+                    )
+
+                    context = await browser.new_context(
+                        user_agent=user_agent,
+                        viewport={"width": 1280, "height": 800},
+                        locale="en-US",
+                        timezone_id="America/New_York",
+                        java_script_enabled=True,
+                        extra_http_headers={"Accept-Language": "en-US,en;q=0.9"}
+                    )
+
+                    page = await context.new_page()
+                    await stealth_async(page)
+
+                    result = await task_func(page)
+                    await human_like_activity(page)
+
+                    await context.close()
+                    await browser.close()
+
+                    logger.info(f"✅ Successfully completed with proxy {proxy['server']}")
+                    return result
+
+                except Exception as e:
+                    logger.warning(f"❌ Failed with proxy {proxy['server']}: {e}")
+                    try:
+                        await browser.close()
+                    except Exception:
+                        pass
+
+            logger.error("⛔ All proxies from file have been tried — task failed.")
+            return None
