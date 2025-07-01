@@ -18,7 +18,7 @@ An automated web scraping project using Playwright in Python. Features include:
 
 1. Clone the repository:
 ```bash
-git clone <project_url>
+https://github.com/Terya12/Playwright-Scraper-with-Proxy-and-Stealth-Support.git
 cd <project_folder>
 ```
 2. Install dependencies:
