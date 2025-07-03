@@ -1,8 +1,8 @@
 import asyncio
 import random
 from pathlib import Path
-from typing import Callable, Optional, Any
-from patchright.async_api import async_playwright, Page
+from typing import Callable, Optional, Any, Dict
+from patchright.async_api import async_playwright, Page, Playwright, Browser
 from playwright_stealth import stealth_async
 from core.logger import get_logger
 
@@ -21,19 +21,25 @@ USER_AGENTS = [
 def load_proxies_from_file() -> list[dict]:
     """Load proxy list from the data.txt file."""
     proxies = []
+    if not PROXY_FILE.exists():
+        logger.warning(f"⚠️ Proxy file not found at {PROXY_FILE}")
+        return proxies
     try:
         with open(PROXY_FILE, "r") as f:
             for line in f:
                 parts = line.strip().split(":")
-                if len(parts) == 4:
+                if len(parts) == 2:  # host:port
+                    host, port = parts
+                    proxies.append({"server": f"http://{host}:{port}"})
+                elif len(parts) == 4:  # host:port:user:password
                     host, port, user, password = parts
                     proxies.append({
                         "server": f"http://{host}:{port}",
                         "username": user,
                         "password": password
                     })
-    except FileNotFoundError:
-        logger.error(f"❌ File {PROXY_FILE} not found")
+    except Exception as e:
+        logger.error(f"❌ Failed to load proxies: {e}")
     return proxies
 
 
@@ -46,58 +52,62 @@ async def human_like_activity(page: Page):
         await asyncio.sleep(random.uniform(1, 2))
 
 
-async def run_browser(task_func: Callable[[Page], Any]) -> Optional[Any]:
-    logger.info("🚀 Launching browser with proxy rotation")
+async def _launch_browser_instance(p: Playwright, user_agent: str, proxy: Optional[Dict[str, str]] = None) -> Browser:
+    """Launches a browser instance with the specified configuration."""
+    browser_args = ["--no-sandbox", "--disable-blink-features=AutomationControlled"]
+    launch_options = {
+        "headless": False,
+        "channel": "chrome",
+        "args": browser_args,
+    }
+    if proxy:
+        launch_options["proxy"] = proxy
+        launch_options["slow_mo"] = 100
 
+    return await p.chromium.launch(**launch_options)
+
+
+async def run_browser(task_func: Callable[[Page], Any]) -> Optional[Any]:
+    logger.info("🚀 Launching browser...")
     proxies = load_proxies_from_file()
     user_agent = random.choice(USER_AGENTS)
 
     async with async_playwright() as p:
         if not proxies:
-            logger.warning("⚠️ Proxy list is empty — launching browser without proxy.")
+            logger.warning("⚠️ Proxy list is empty or file not found — launching browser without proxy.")
+            browser = None
             try:
-                browser = await p.chromium.launch(
-                    headless=False,
-                    channel="chrome",
-                    args=["--no-sandbox", "--disable-blink-features=AutomationControlled"]
-                )
+                browser = await _launch_browser_instance(p, user_agent)
                 context = await browser.new_context(
-                    # user_agent=user_agent,
-                    # viewport={"width": 1280, "height": 800},
-                    # locale="en-US",
-                    # timezone_id="America/New_York",
-                    # java_script_enabled=True,
-                    # extra_http_headers={"Accept-Language": "en-US,en;q=0.9"}
+                    user_agent=user_agent,
+                    viewport={"width": 1280, "height": 800},
+                    locale="en-US",
+                    timezone_id="America/New_York",
+                    java_script_enabled=True,
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"}
                 )
-
                 page = await context.new_page()
                 await stealth_async(page)
 
                 result = await task_func(page)
                 await human_like_activity(page)
 
-                await context.close()
-                await browser.close()
-
                 logger.info("✅ Successfully completed without proxy")
                 return result
-
             except Exception as e:
                 logger.error(f"⛔ Failed to run browser without proxy: {e}")
                 return None
-
+            finally:
+                if browser:
+                    await browser.close()
         else:
-            for attempt, proxy in enumerate(proxies, 1):
-                logger.info(f"🔁 Attempt #{attempt} with proxy {proxy['server']}")
+            logger.info(f"🔗 Found {len(proxies)} proxies. Starting rotation.")
+            for attempt, proxy_config in enumerate(proxies, 1):
+                proxy_server = proxy_config.get('server')
+                logger.info(f"🔁 Attempt #{attempt} with proxy {proxy_server}")
+                browser = None
                 try:
-                    browser = await p.chromium.launch(
-                        headless=False,
-                        slow_mo=100,
-                        channel="chrome",
-                        args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-                        proxy=proxy
-                    )
-
+                    browser = await _launch_browser_instance(p, user_agent, proxy_config)
                     context = await browser.new_context(
                         user_agent=user_agent,
                         viewport={"width": 1280, "height": 800},
@@ -106,25 +116,21 @@ async def run_browser(task_func: Callable[[Page], Any]) -> Optional[Any]:
                         java_script_enabled=True,
                         extra_http_headers={"Accept-Language": "en-US,en;q=0.9"}
                     )
-
                     page = await context.new_page()
                     await stealth_async(page)
 
                     result = await task_func(page)
                     await human_like_activity(page)
 
-                    await context.close()
-                    await browser.close()
-
-                    logger.info(f"✅ Successfully completed with proxy {proxy['server']}")
+                    logger.info(f"✅ Successfully completed with proxy {proxy_server}")
                     return result
-
                 except Exception as e:
-                    logger.warning(f"❌ Failed with proxy {proxy['server']}: {e}")
-                    try:
+                    logger.warning(f"❌ Failed with proxy {proxy_server}: {e}")
+                    if browser:
                         await browser.close()
-                    except Exception:
-                        pass
+                finally:
+                    if browser and not browser.is_closed():
+                        await browser.close()
 
             logger.error("⛔ All proxies from file have been tried — task failed.")
             return None
